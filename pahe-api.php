@@ -1,18 +1,16 @@
-
 <?php
 /**
  * Plugin Name: Gutenberg & CSS REST API
- * Description: Exposes Gutenberg content, page CSS, and enqueued CSS files via REST API.
- * Version: 1.1
+ * Description: Exposes Gutenberg content, page CSS, and enqueued CSS files via REST API including font-family information.
+ * Version: 1.2
  * Author: Boomdevs
  * Author URI: https://boomdevs.com
  */
 
 if (!defined('ABSPATH')) {
-    exit; // Exit if accessed directly
+    exit;
 }
 
-// Register API endpoint for Gutenberg content
 function get_gutenberg_content($request) {
     $page_id = $request['id'];
     $post = get_post($page_id);
@@ -28,7 +26,22 @@ function get_gutenberg_content($request) {
     ]);
 }
 
-// Register API endpoint for page-specific CSS
+function extract_font_families($css) {
+    preg_match_all('/font-family\s*:\s*([^;}]+)[;}]/', $css, $matches);
+    $font_families = [];
+
+    if (!empty($matches[1])) {
+        foreach ($matches[1] as $font) {
+            $font = trim($font);
+            // Remove quotes if present
+            $font = preg_replace('/[\'"]/', '', $font);
+            $font_families[] = $font;
+        }
+    }
+
+    return array_unique($font_families);
+}
+
 function get_page_css($request) {
     $page_id = $request['id'];
     $post = get_post($page_id);
@@ -38,20 +51,29 @@ function get_page_css($request) {
     }
 
     ob_start();
-    wp_head(); // Capture styles
+    wp_head();
     $head_content = ob_get_clean();
 
     preg_match_all('/<style[^>]*>(.*?)<\/style>/is', $head_content, $matches);
     $css = implode("\n", $matches[1]);
+    $font_families = extract_font_families($css);
 
     return rest_ensure_response([
         'id' => $post->ID,
         'css' => $css,
+        'font_families' => $font_families,
     ]);
 }
 
-// NEW FUNCTION: Get all enqueued CSS files for a specific page
-function get_enqueued_css_files($request) {
+function get_external_css_content($url) {
+    $response = wp_remote_get($url);
+    if (is_wp_error($response)) {
+        return '';
+    }
+    return wp_remote_retrieve_body($response);
+}
+
+function get_all_css_files($request) {
     $page_id = $request['id'];
     $post = get_post($page_id);
 
@@ -59,42 +81,53 @@ function get_enqueued_css_files($request) {
         return new WP_Error('no_post', 'Invalid page ID', ['status' => 404]);
     }
 
-    // Set up the WordPress environment for this page
-    global $wp_scripts, $wp_styles;
-    $wp_scripts = new WP_Scripts();
+    global $wp_styles;
     $wp_styles = new WP_Styles();
 
-    // Load the page to get its enqueued styles
     setup_postdata($post);
 
-    // Force WordPress to enqueue all styles for this page
     ob_start();
     wp_head();
-    ob_get_clean();
+    $head_content = ob_get_clean();
 
-    // Get all enqueued stylesheets
-    $enqueued_styles = [];
+    preg_match_all('/<link[^>]+rel=["\']stylesheet["\'][^>]+>/i', $head_content, $link_matches);
+    preg_match_all('/<style[^>]*>(.*?)<\/style>/is', $head_content, $style_matches);
 
-    if (!empty($wp_styles->queue)) {
-        foreach ($wp_styles->queue as $handle) {
-            if (isset($wp_styles->registered[$handle])) {
-                $style = $wp_styles->registered[$handle];
-                $src = $style->src;
+    $css_files = [];
+    $all_font_families = [];
 
-                // Convert relative URLs to absolute
-                if (strpos($src, '//') === false && strpos($src, 'http') !== 0) {
-                    $src = site_url($src);
-                }
-
-                $enqueued_styles[] = [
-                    'handle' => $handle,
-                    'src' => $src,
-                    'deps' => $style->deps,
-                    'version' => $style->ver,
-                    'media' => $style->args
-                ];
+    // Process external CSS files
+    foreach ($link_matches[0] as $link_tag) {
+        preg_match('/href=["\']([^"\']+)["\']/i', $link_tag, $url_match);
+        if (!empty($url_match[1])) {
+            $css_url = $url_match[1];
+            if (strpos($css_url, 'http') === false && strpos($css_url, '://') === false) {
+                $css_url = site_url($css_url);
             }
+
+            $css_content = get_external_css_content($css_url);
+            $font_families = extract_font_families($css_content);
+
+            $css_files[] = [
+                'type' => 'external',
+                'url' => $css_url,
+                'font_families' => $font_families
+            ];
+
+            $all_font_families = array_merge($all_font_families, $font_families);
         }
+    }
+
+    // Process inline styles
+    foreach ($style_matches[1] as $inline_style) {
+        $font_families = extract_font_families($inline_style);
+        $css_files[] = [
+            'type' => 'inline',
+            'css' => $inline_style,
+            'font_families' => $font_families
+        ];
+
+        $all_font_families = array_merge($all_font_families, $font_families);
     }
 
     wp_reset_postdata();
@@ -102,7 +135,8 @@ function get_enqueued_css_files($request) {
     return rest_ensure_response([
         'id' => $post->ID,
         'title' => get_the_title($post),
-        'css_files' => $enqueued_styles,
+        'css_files' => $css_files,
+        'all_font_families' => array_unique($all_font_families)
     ]);
 }
 
@@ -119,10 +153,9 @@ function register_custom_rest_routes() {
         'permission_callback' => '__return_true',
     ]);
 
-    // New route for enqueued CSS files
     register_rest_route('gutenberg/v2', '/page-css-files/(?P<id>\d+)', [
         'methods' => 'GET',
-        'callback' => 'get_enqueued_css_files',
+        'callback' => 'get_all_css_files',
         'permission_callback' => '__return_true',
     ]);
 }

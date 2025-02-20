@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Gutenberg & CSS REST API (Extended)
- * Description: Exposes Gutenberg content, page CSS, and enqueued CSS/JS files via REST API, including third-party block styles/scripts.
- * Version: 1.2
+ * Description: Exposes Gutenberg content, page CSS, and enqueued CSS/JS files via REST API, including third-party block styles/scripts and fonts.
+ * Version: 1.3
  * Author: Boomdevs
  * Author URI: https://boomdevs.com
  */
@@ -25,7 +25,7 @@ function get_gutenberg_content($request) {
     ]);
 }
 
-// Fetch All Enqueued CSS & JS Files for Page
+// Fetch All Enqueued CSS, JS & Fonts for Page
 function get_enqueued_assets($request) {
     $page_id = $request['id'];
     $post = get_post($page_id);
@@ -73,6 +73,11 @@ function get_enqueued_assets($request) {
     preg_match_all('/<script[^>]*>(.*?)<\/script>/is', $head_foot_content, $script_matches);
     $inline_js = implode("\n", $script_matches[1]);
 
+    preg_match_all('/<link[^>]+href=["\']([^"\']+)["\'][^>]*>/i', $head_foot_content, $font_matches);
+    $fonts = array_filter($font_matches[1], function ($url) {
+        return strpos($url, 'fonts.googleapis.com') !== false || strpos($url, '/wp-content/themes/') !== false || strpos($url, '/wp-content/plugins/') !== false;
+    });
+
     wp_reset_postdata();
 
     return rest_ensure_response([
@@ -82,6 +87,7 @@ function get_enqueued_assets($request) {
         'js_files' => $enqueued_scripts,
         'inline_css' => $inline_css,
         'inline_js' => $inline_js,
+        'fonts' => array_values($fonts),
     ]);
 }
 

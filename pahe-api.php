@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Gutenberg & CSS REST API (Extended)
+ * Plugin Name: Gutenberg & CSS REST API
  * Description: Exposes Gutenberg content, page CSS, and enqueued CSS/JS files via REST API, including third-party block styles/scripts and fonts.
  * Version: 1.3
  * Author: Boomdevs
